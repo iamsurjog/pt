@@ -33,8 +33,10 @@ to quickly create a Cobra application.`,
 		}else {
 			version = ""
 		}
-		scripts.Install(packageName, version, true)
+		scripts.Add(packageName, version, true)
 		// TODO: Check for venv and create symlinks
+		venvPath := scripts.GetVenvPath()
+		println(venvPath)
 	},
 }
 

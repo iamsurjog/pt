@@ -111,7 +111,7 @@ func extractTarGz(src, destDir string) error {
 	return nil
 }
 
-func Install(packageName string, version string, fast bool) {
+func Add(packageName string, version string, fast bool) {
 	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
 	resp, err := http.Get(url)
 	if err != nil {
