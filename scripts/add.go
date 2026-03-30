@@ -171,6 +171,17 @@ func Add(packageName string, version string, fast bool) {
 	}
 	// Create directory: basePath/<package>/<version>/
 	dir := filepath.Join(basePath, packageName, version)
+
+	// Check if package version already exists
+	if _, err := os.Stat(dir); err == nil {
+		// Directory exists, check if it has content
+		entries, err := os.ReadDir(dir)
+		if err == nil && len(entries) > 0 {
+			fmt.Printf("Package %s version %s already installed at %s\n", packageName, version, dir)
+			return
+		}
+	}
+
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		fmt.Printf("Failed to create directory %s: %v\n", dir, err)
 		return
