@@ -28,15 +28,17 @@ to quickly create a Cobra application.`,
 		}
 		packageName := args[0]
 		var version string
-		if len(args) > 1{
+		if len(args) > 1 {
 			version = args[1]
-		}else {
+		} else {
 			version = ""
 		}
-		scripts.Add(packageName, version, true)
-		// TODO: Check for venv and create symlinks
-		venvPath := scripts.GetVenvPath()
-		println(venvPath)
+		resolvedVersion, err := scripts.Add(packageName, version, true)
+		if err != nil {
+			fmt.Printf("Failed to add package: %v\n", err)
+			return
+		}
+		scripts.Install(packageName, resolvedVersion)
 	},
 }
 

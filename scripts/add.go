@@ -111,27 +111,27 @@ func extractTarGz(src, destDir string) error {
 	return nil
 }
 
-func Add(packageName string, version string, fast bool) {
+func Add(packageName string, version string, fast bool) (string, error) {
 	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Printf("Request failed: %v\n", err)
-		return
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		fmt.Printf("HTTP error: %s\n", resp.Status)
-		return
+		return "", fmt.Errorf("HTTP error: %s", resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("Reading body failed: %v\n", err)
-		return
+		return "", err
 	}
 	var response PyPIResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		fmt.Printf("JSON unmarshal failed: %v\n", err)
-		return
+		return "", err
 	}
 	// Resolve version
 	if version == "" {
@@ -142,11 +142,11 @@ func Add(packageName string, version string, fast bool) {
 	files, ok := response.Releases[version]
 	if !ok {
 		fmt.Printf("Version %s not found for package %s\n", version, packageName)
-		return
+		return "", fmt.Errorf("version %s not found", version)
 	}
 	if len(files) == 0 {
 		fmt.Printf("Version %s has no downloadable files\n", version)
-		return
+		return "", fmt.Errorf("version %s has no downloadable files", version)
 	}
 	// Pick wheel first, fall back to any file
 	var selected *FileInfo
@@ -165,7 +165,7 @@ func Add(packageName string, version string, fast bool) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Printf("Could not get home directory: %v\n", err)
-			return
+			return "", err
 		}
 		basePath = filepath.Join(home, basePath[2:])
 	}
@@ -178,41 +178,42 @@ func Add(packageName string, version string, fast bool) {
 		entries, err := os.ReadDir(dir)
 		if err == nil && len(entries) > 0 {
 			fmt.Printf("Package %s version %s already installed at %s\n", packageName, version, dir)
-			return
+			return version, nil
 		}
 	}
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		fmt.Printf("Failed to create directory %s: %v\n", dir, err)
-		return
+		return "", err
 	}
 	// Download the file
 	fmt.Printf("Downloading %s...\n", selected.Filename)
 	fileResp, err := http.Get(selected.URL)
 	if err != nil {
 		fmt.Printf("Download failed: %v\n", err)
-		return
+		return "", err
 	}
 	defer fileResp.Body.Close()
 	destPath := filepath.Join(dir, selected.Filename)
 	destFile, err := os.Create(destPath)
 	if err != nil {
 		fmt.Printf("Failed to create file %s: %v\n", destPath, err)
-		return
+		return "", err
 	}
 	defer destFile.Close()
 	if _, err := io.Copy(destFile, fileResp.Body); err != nil {
 		fmt.Printf("Failed to write file: %v\n", err)
-		return
+		return "", err
 	}
 
 	fmt.Printf("Extracting %s...\n", selected.Filename)
 	if err := extractFile(destPath, dir); err != nil {
 		fmt.Printf("Extraction failed: %v\n", err)
-		return
+		return "", err
 	}
 	fmt.Println("Done.")
 
 	fmt.Printf("Saved %s to %s\n", selected.Filename, dir)
 
+	return version, nil
 }
