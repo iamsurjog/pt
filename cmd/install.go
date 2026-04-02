@@ -1,6 +1,8 @@
 /*
 Copyright © 2026 NAME HERE <EMAIL ADDRESS>
 */
+// TODO: Store dependency tree
+// NOTE: https://github.com/kuzudb/go-kuzu?tab=readme-ov-file
 package cmd
 
 import (
