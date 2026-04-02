@@ -112,6 +112,18 @@ func extractTarGz(src, destDir string) error {
 }
 
 func Add(packageName string, version string, fast bool) (string, error) {
+	visited := make(map[string]bool)
+	return addInternal(packageName, version, fast, visited)
+}
+
+func addInternal(packageName string, version string, fast bool, visited map[string]bool) (string, error) {
+	// Avoid infinite recursion
+	if visited[packageName] {
+		fmt.Printf("Package %s already processed, skipping to avoid cycles\n", packageName)
+		return "", nil
+	}
+	visited[packageName] = true
+
 	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -132,6 +144,23 @@ func Add(packageName string, version string, fast bool) (string, error) {
 	if err := json.Unmarshal(body, &response); err != nil {
 		fmt.Printf("JSON unmarshal failed: %v\n", err)
 		return "", err
+	}
+	// Print requirements from requires_dist
+	var deps []string
+	if requiresDist, ok := response.Info["requires_dist"]; ok && requiresDist != nil {
+		if reqs, ok := requiresDist.([]interface{}); ok {
+			fmt.Println("Requirements:")
+			for _, req := range reqs {
+				if reqStr, ok := req.(string); ok {
+					fmt.Println("  -", reqStr)
+					// Skip dependencies with environment markers (e.g., extras, python version)
+					if strings.Contains(reqStr, ";") || strings.Contains(reqStr, "[") {
+						continue
+					}
+					deps = append(deps, parsePackageName(reqStr))
+				}
+			}
+		}
 	}
 	// Resolve version
 	if version == "" {
@@ -160,60 +189,85 @@ func Add(packageName string, version string, fast bool) (string, error) {
 		selected = &files[0]
 	}
 	// Expand ~ in config.Path
-	basePath := config.Path
-	if strings.HasPrefix(basePath, "~/") {
+	expandedBasePath := config.Path
+	if strings.HasPrefix(expandedBasePath, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Printf("Could not get home directory: %v\n", err)
 			return "", err
 		}
-		basePath = filepath.Join(home, basePath[2:])
+		expandedBasePath = filepath.Join(home, expandedBasePath[2:])
 	}
-	// Create directory: basePath/<package>/<version>/
-	dir := filepath.Join(basePath, packageName, version)
+	// Save metadata.json in package directory
+	packageDir := filepath.Join(expandedBasePath, packageName)
+	if err := os.MkdirAll(packageDir, 0755); err != nil {
+		fmt.Printf("Failed to create package directory %s: %v\n", packageDir, err)
+		return "", err
+	}
+	metadataPath := filepath.Join(packageDir, "metadata.json")
+	if err := os.WriteFile(metadataPath, body, 0644); err != nil {
+		fmt.Printf("Failed to write metadata.json: %v\n", err)
+		return "", err
+	}
+	// Create directory: expandedBasePath/<package>/<version>/
+	dir := filepath.Join(expandedBasePath, packageName, version)
 
 	// Check if package version already exists
+	alreadyInstalled := false
 	if _, err := os.Stat(dir); err == nil {
 		// Directory exists, check if it has content
 		entries, err := os.ReadDir(dir)
 		if err == nil && len(entries) > 0 {
 			fmt.Printf("Package %s version %s already installed at %s\n", packageName, version, dir)
-			return version, nil
+			alreadyInstalled = true
 		}
 	}
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		fmt.Printf("Failed to create directory %s: %v\n", dir, err)
-		return "", err
-	}
-	// Download the file
-	fmt.Printf("Downloading %s...\n", selected.Filename)
-	fileResp, err := http.Get(selected.URL)
-	if err != nil {
-		fmt.Printf("Download failed: %v\n", err)
-		return "", err
-	}
-	defer fileResp.Body.Close()
-	destPath := filepath.Join(dir, selected.Filename)
-	destFile, err := os.Create(destPath)
-	if err != nil {
-		fmt.Printf("Failed to create file %s: %v\n", destPath, err)
-		return "", err
-	}
-	defer destFile.Close()
-	if _, err := io.Copy(destFile, fileResp.Body); err != nil {
-		fmt.Printf("Failed to write file: %v\n", err)
-		return "", err
+	if !alreadyInstalled {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			fmt.Printf("Failed to create directory %s: %v\n", dir, err)
+			return "", err
+		}
+		// Download the file
+		fmt.Printf("Downloading %s...\n", selected.Filename)
+		fileResp, err := http.Get(selected.URL)
+		if err != nil {
+			fmt.Printf("Download failed: %v\n", err)
+			return "", err
+		}
+		defer fileResp.Body.Close()
+		destPath := filepath.Join(dir, selected.Filename)
+		destFile, err := os.Create(destPath)
+		if err != nil {
+			fmt.Printf("Failed to create file %s: %v\n", destPath, err)
+			return "", err
+		}
+		defer destFile.Close()
+		if _, err := io.Copy(destFile, fileResp.Body); err != nil {
+			fmt.Printf("Failed to write file: %v\n", err)
+			return "", err
+		}
+
+		fmt.Printf("Extracting %s...\n", selected.Filename)
+		if err := extractFile(destPath, dir); err != nil {
+			fmt.Printf("Extraction failed: %v\n", err)
+			return "", err
+		}
+		fmt.Println("Done.")
+
+		fmt.Printf("Saved %s to %s\n", selected.Filename, dir)
 	}
 
-	fmt.Printf("Extracting %s...\n", selected.Filename)
-	if err := extractFile(destPath, dir); err != nil {
-		fmt.Printf("Extraction failed: %v\n", err)
-		return "", err
+	// Process dependencies
+	for _, dep := range deps {
+		if dep != "" {
+			fmt.Printf("Adding dependency: %s\n", dep)
+			if _, err := addInternal(dep, "", fast, visited); err != nil {
+				fmt.Printf("Failed to add dependency %s: %v\n", dep, err)
+				// Continue with other dependencies
+			}
+		}
 	}
-	fmt.Println("Done.")
-
-	fmt.Printf("Saved %s to %s\n", selected.Filename, dir)
 
 	return version, nil
 }

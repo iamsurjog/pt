@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,7 +11,64 @@ import (
 	"pt/config"
 )
 
+// getDependencies reads metadata.json for a package and returns a list of
+// unconditional dependency package names.
+func getDependencies(packageName string, basePath string) ([]string, error) {
+	metadataPath := filepath.Join(basePath, packageName, "metadata.json")
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return nil, err
+	}
+	var response PyPIResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	var deps []string
+	if requiresDist, ok := response.Info["requires_dist"]; ok && requiresDist != nil {
+		if reqs, ok := requiresDist.([]interface{}); ok {
+			for _, req := range reqs {
+				if reqStr, ok := req.(string); ok {
+					// Skip optional dependencies (extras, environment markers)
+					if strings.Contains(reqStr, ";") || strings.Contains(reqStr, "[") {
+						continue
+					}
+					deps = append(deps, parsePackageName(reqStr))
+				}
+			}
+		}
+	}
+	return deps, nil
+}
+
+// getInstalledVersion returns the first version directory found for a package.
+// If multiple versions exist, it returns the first (unsorted).
+func getInstalledVersion(packageName string, basePath string) (string, error) {
+	pkgDir := filepath.Join(basePath, packageName)
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return entry.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("no version directory found for package %s", packageName)
+}
+
 func Install(packageName string, version string) {
+	visited := make(map[string]bool)
+	installInternal(packageName, version, visited)
+}
+
+func installInternal(packageName string, version string, visited map[string]bool) {
+	// Avoid infinite recursion
+	if visited[packageName] {
+		fmt.Printf("Package %s already processed, skipping to avoid cycles\n", packageName)
+		return
+	}
+	visited[packageName] = true
+
 	// Expand ~ in config.Path
 	basePath := config.Path
 	if strings.HasPrefix(basePath, "~/") {
@@ -80,5 +138,25 @@ func Install(packageName string, version string) {
 		} else {
 			fmt.Printf("Symlinked %s -> %s\n", src, dst)
 		}
+	}
+
+	// Process dependencies
+	deps, err := getDependencies(packageName, basePath)
+	if err != nil {
+		fmt.Printf("Could not read dependencies for %s: %v\n", packageName, err)
+		return
+	}
+	for _, dep := range deps {
+		if dep == "" {
+			continue
+		}
+		// Find installed version for dependency
+		depVersion, err := getInstalledVersion(dep, basePath)
+		if err != nil {
+			fmt.Printf("Dependency %s not installed, skipping\n", dep)
+			continue
+		}
+		fmt.Printf("Installing dependency: %s version %s\n", dep, depVersion)
+		installInternal(dep, depVersion, visited)
 	}
 }
